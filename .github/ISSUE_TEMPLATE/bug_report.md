@@ -2,8 +2,8 @@
 name: Bug report
 about: Create a report to help us improve
 title: "[ISSUE?]"
-labels: ''
-assignees: ''
+labels: bug, help wanted
+assignees: Smiley-Devv
 
 ---
 
