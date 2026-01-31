@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.IO;
 using System.Text.RegularExpressions;
 using System.Threading;
@@ -10,7 +10,10 @@ namespace TaskForceAdmiralLiveRPC
         private FileSystemWatcher watcher;
         private string logFilePath;
         private long lastReadPosition = 0;
+        private FileStream fs;
+        private StreamReader reader;
         private System.Threading.Timer pollTimer;
+        private readonly object lockObj = new object();
 
         public event Action<BattleEvent> BattleEventDetected;
         public event Action<string> StatusChanged;
@@ -25,11 +28,22 @@ namespace TaskForceAdmiralLiveRPC
         {
             try
             {
-                // Common locations for the log file
+                // Possible Steam locations (x86 & x64)
                 string[] possiblePaths = {
+                    Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86),
+                                 "Steam", "steamapps", "common", "Task Force Admiral", "bin", "master", "Plankton.log"),
+                    Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
+                                 "Steam", "steamapps", "common", "Task Force Admiral", "bin", "master", "Plankton.log"),
+
+                    // App base / bin
                     Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "bin", "Plankton.log"),
                     Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Plankton.log"),
-                    Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "My Games", "TaskForceAdmiral", "logs", "Plankton.log"),
+
+                    // My Documents
+                    Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),
+                                 "My Games", "TaskForceAdmiral", "logs", "Plankton.log"),
+
+                    // Current directory / bin
                     Path.Combine(Directory.GetCurrentDirectory(), "bin", "Plankton.log")
                 };
 
@@ -44,7 +58,6 @@ namespace TaskForceAdmiralLiveRPC
                     }
                 }
 
-                // If not found, watch common directories
                 StatusChanged?.Invoke("Log file not found - will watch for creation");
                 WatchForLogCreation();
             }
@@ -58,9 +71,7 @@ namespace TaskForceAdmiralLiveRPC
         {
             string watchPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "bin");
             if (!Directory.Exists(watchPath))
-            {
                 watchPath = AppDomain.CurrentDomain.BaseDirectory;
-            }
 
             watcher = new FileSystemWatcher(watchPath, "*.log");
             watcher.Created += (s, e) =>
@@ -77,49 +88,66 @@ namespace TaskForceAdmiralLiveRPC
 
         private void InitializeMonitoring()
         {
-            if (string.IsNullOrEmpty(logFilePath) || !File.Exists(logFilePath))
-                return;
-
-            // Start at end of file
-            using (var fs = new FileStream(logFilePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+            try
             {
+                if (string.IsNullOrEmpty(logFilePath) || !File.Exists(logFilePath))
+                    return;
+
+                // Open FileStream once for the life of the monitor
+                fs = new FileStream(logFilePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+                reader = new StreamReader(fs);
+
+                // Start at end of file
                 lastReadPosition = fs.Length;
+                fs.Seek(lastReadPosition, SeekOrigin.Begin);
+
+                // Start timer
+                pollTimer = new System.Threading.Timer(_ => CheckForNewContent(), null, 0, 500);
+
+                StatusChanged?.Invoke("Log monitoring started");
             }
-
-            // Poll every 500ms for new content
-            pollTimer = new System.Threading.Timer(_ => CheckForNewContent(), null, 0, 500);
-
-            StatusChanged?.Invoke("Log monitoring started");
+            catch (Exception ex)
+            {
+                ErrorOccurred?.Invoke($"Failed to initialize monitoring: {ex.Message}");
+            }
         }
 
         private void CheckForNewContent()
         {
-            try
+            lock (lockObj) // Prevent re-entrant calls
             {
-                if (!File.Exists(logFilePath))
-                    return;
-
-                using (var fs = new FileStream(logFilePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+                try
                 {
-                    if (fs.Length <= lastReadPosition)
-                        return; // No new content
+                    if (fs == null || reader == null || !File.Exists(logFilePath))
+                        return;
 
-                    fs.Seek(lastReadPosition, SeekOrigin.Begin);
-                    using (var reader = new StreamReader(fs))
+                    while (!reader.EndOfStream)
                     {
-                        string line;
-                        while ((line = reader.ReadLine()) != null)
+                        string line = reader.ReadLine();
+                        if (!string.IsNullOrWhiteSpace(line))
                         {
-                            ParseLogLine(line);
+                            try
+                            {
+                                ParseLogLine(line);
+                            }
+                            catch (Exception exLine)
+                            {
+                                ErrorOccurred?.Invoke($"Parse line error: {exLine.Message}");
+                            }
                         }
                     }
 
                     lastReadPosition = fs.Position;
                 }
-            }
-            catch (Exception ex)
-            {
-                ErrorOccurred?.Invoke($"Log read error: {ex.Message}");
+                catch (IOException ioEx)
+                {
+                    // File temporarily locked by game
+                    StatusChanged?.Invoke($"File busy, retrying: {ioEx.Message}");
+                }
+                catch (Exception ex)
+                {
+                    ErrorOccurred?.Invoke($"Log read error: {ex.Message}");
+                }
             }
         }
 
@@ -129,85 +157,62 @@ namespace TaskForceAdmiralLiveRPC
                 return;
 
             var battleEvent = new BattleEvent { RawLine = line, Timestamp = DateTime.Now };
-
-            // Detect event type and parse accordingly
+            bool triggerEvent = false; // Only trigger if it’s a meaningful event
 
             // Attack over/report
             if (line.Contains("Enemy air attack over") || line.Contains("action report"))
             {
                 battleEvent.EventType = BattleEventType.AttackReport;
-                battleEvent.Message = line;
-                BattleEventDetected?.Invoke(battleEvent);
-                return;
+                triggerEvent = true;
             }
-
             // Aircraft destroyed
-            var destroyedMatch = Regex.Match(line, @"-(\w+\d*\w*)\s+destroyed");
-            if (destroyedMatch.Success)
+            else if (Regex.Match(line, @"-(\w+\d*\w*)\s+destroyed").Success)
             {
+                var m = Regex.Match(line, @"-(\w+\d*\w*)\s+destroyed");
                 battleEvent.EventType = BattleEventType.AircraftDestroyed;
-                battleEvent.AircraftType = destroyedMatch.Groups[1].Value;
-                battleEvent.Message = $"{battleEvent.AircraftType} shot down";
-                BattleEventDetected?.Invoke(battleEvent);
-                return;
+                battleEvent.AircraftType = m.Groups[1].Value;
+                triggerEvent = true;
             }
-
             // Ship hit by bomb
-            var bombMatch = Regex.Match(line, @"-([\w\s\-()]+)\s+hit by a bomb");
-            if (bombMatch.Success)
+            else if (Regex.Match(line, @"-([\w\s\-()]+)\s+hit by a bomb").Success)
             {
+                var m = Regex.Match(line, @"-([\w\s\-()]+)\s+hit by a bomb");
                 battleEvent.EventType = BattleEventType.ShipHitBomb;
-                battleEvent.ShipName = bombMatch.Groups[1].Value.Trim();
-                battleEvent.Message = $"{battleEvent.ShipName} hit by bomb!";
-                BattleEventDetected?.Invoke(battleEvent);
-                return;
+                battleEvent.ShipName = m.Groups[1].Value.Trim();
+                triggerEvent = true;
             }
-
             // Ship hit by torpedo
-            var torpedoMatch = Regex.Match(line, @"-([\w\s\-()]+)\s+hit by a torpedo");
-            if (torpedoMatch.Success)
+            else if (Regex.Match(line, @"-([\w\s\-()]+)\s+hit by a torpedo").Success)
             {
+                var m = Regex.Match(line, @"-([\w\s\-()]+)\s+hit by a torpedo");
                 battleEvent.EventType = BattleEventType.ShipHitTorpedo;
-                battleEvent.ShipName = torpedoMatch.Groups[1].Value.Trim();
-                battleEvent.Message = $"{battleEvent.ShipName} hit by torpedo!";
-                BattleEventDetected?.Invoke(battleEvent);
-                return;
+                battleEvent.ShipName = m.Groups[1].Value.Trim();
+                triggerEvent = true;
             }
-
-            // Radio chatter (pilot communications)
-            if (line.Contains("This is") || line.Contains("Target in sight") ||
-                line.Contains("bogeys") || line.Contains("bandits"))
+            // Radio chatter
+            else if (line.Contains("This is") || line.Contains("Target in sight") || line.Contains("bogeys") || line.Contains("bandits"))
             {
                 battleEvent.EventType = BattleEventType.RadioChatter;
-                battleEvent.Message = line.Trim();
-                BattleEventDetected?.Invoke(battleEvent);
-                return;
+                triggerEvent = true;
             }
-
-            // Ammo expended
-            if (line.Contains("Ammo expended"))
+            // Ammo report
+            else if (line.Contains("Ammo expended"))
             {
                 battleEvent.EventType = BattleEventType.AmmoReport;
-                battleEvent.Message = line.Trim();
-                BattleEventDetected?.Invoke(battleEvent);
-                return;
+                triggerEvent = true;
             }
-
-            // Date markers
-            var dateMatch = Regex.Match(line, @"(\w+\s+\d+\s+\d{4})");
-            if (dateMatch.Success)
+            // Date marker
+            else if (Regex.Match(line, @"(\w+\s+\d+\s+\d{4})").Success)
             {
+                var m = Regex.Match(line, @"(\w+\s+\d+\s+\d{4})");
                 battleEvent.EventType = BattleEventType.DateMarker;
-                battleEvent.GameDate = dateMatch.Groups[1].Value;
-                battleEvent.Message = $"Date: {battleEvent.GameDate}";
-                BattleEventDetected?.Invoke(battleEvent);
-                return;
+                battleEvent.GameDate = m.Groups[1].Value;
+                triggerEvent = true;
             }
 
-            // Generic log entry
-            if (!string.IsNullOrWhiteSpace(line))
+            // Only invoke the event if we marked it as important
+            if (triggerEvent)
             {
-                battleEvent.EventType = BattleEventType.Generic;
                 battleEvent.Message = line.Trim();
                 BattleEventDetected?.Invoke(battleEvent);
             }
@@ -216,6 +221,8 @@ namespace TaskForceAdmiralLiveRPC
         public void Dispose()
         {
             pollTimer?.Dispose();
+            reader?.Dispose();
+            fs?.Dispose();
             watcher?.Dispose();
         }
     }
