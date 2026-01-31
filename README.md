@@ -1,7 +1,7 @@
 # Task Force Admiral Rich Presence
 
-[![Discord](https://img.shields.io/badge/Discord-Rich_Presence-5865F2?style=for-the-badge&logo=discord&logoColor=white)](https://discord.com)
-[![Game](https://img.shields.io/badge/Game-Task_Force_Admiral-blue?style=for-the-badge)]([https://drydockdreams.wordpress.com]
+[![Discord](https://img.shields.io/badge/Discord-Rich_Presence-5865F2?style=for-the-badge&logo=discord&logoColor=white)](https://discord.com)  
+[![Game](https://img.shields.io/badge/Game-Task_Force_Admiral-blue?style=for-the-badge)](https://drydockdreams.wordpress.com)  
 [![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)](LICENSE)
 
 A modern WinForms application that monitors **Task Force Admiral** gameplay and displays real-time battle events via **Discord Rich Presence**.
