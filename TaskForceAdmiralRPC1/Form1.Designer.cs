@@ -1,4 +1,4 @@
-﻿namespace TaskForceAdmiralLiveRPC
+namespace TaskForceAdmiralLiveRPC
 {
     partial class Form1
     {
