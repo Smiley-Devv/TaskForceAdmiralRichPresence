@@ -1,13 +1,14 @@
-﻿using System;
+using System;
 using System.Net.Http;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 
 namespace TaskForceAdmiralLiveRPC
 {
     public class GitHubUpdateChecker
     {
-        private const string GITHUB_REPO = "Smiley-Devv/TaskForceAdmiralRPC"; // TODO: Update this
+        private const string GITHUB_REPO = "Smiley-Devv/TaskForceAdmiralRichPresence";
         private const string CURRENT_VERSION = "1.0.0";
 
         public event Action<UpdateInfo> UpdateAvailable;
@@ -21,7 +22,7 @@ namespace TaskForceAdmiralLiveRPC
 
                 using (var client = new HttpClient())
                 {
-                    client.DefaultRequestHeaders.UserAgent.ParseAdd("TaskForceAdmiralRPC");
+                    client.DefaultRequestHeaders.UserAgent.ParseAdd("TaskForceAdmiralLiveRPC");
 
                     string apiUrl = $"https://api.github.com/repos/{GITHUB_REPO}/releases/latest";
                     var response = await client.GetStringAsync(apiUrl);
@@ -34,15 +35,23 @@ namespace TaskForceAdmiralLiveRPC
                         return;
                     }
 
-                    string latestVersion = release.tag_name.Replace("v", "");
+                    // Map non-numeric tags to real versions
+                    string latestVersion = MapTagToVersion(release.tag_name);
 
+                    if (string.IsNullOrEmpty(latestVersion))
+                    {
+                        StatusChanged?.Invoke($"Invalid latest version format: {release.tag_name}");
+                        return;
+                    }
+
+                    // Compare with current
                     if (CompareVersions(latestVersion, CURRENT_VERSION) > 0)
                     {
                         var updateInfo = new UpdateInfo
                         {
                             LatestVersion = latestVersion,
                             CurrentVersion = CURRENT_VERSION,
-                            ReleaseNotes = release.body,
+                            ReleaseNotes = release.body ?? "",
                             DownloadUrl = release.html_url,
                             PublishedDate = release.published_at
                         };
@@ -52,7 +61,7 @@ namespace TaskForceAdmiralLiveRPC
                     }
                     else
                     {
-                        StatusChanged?.Invoke("You're up to date!");
+                        StatusChanged?.Invoke($"You're up to date! (v{CURRENT_VERSION})");
                     }
                 }
             }
@@ -62,12 +71,29 @@ namespace TaskForceAdmiralLiveRPC
             }
         }
 
+        /// <summary>
+        /// Maps GitHub tag names to actual numeric versions
+        /// </summary>
+        private string MapTagToVersion(string tag)
+        {
+            return tag.ToLower() switch
+            {
+                "release" => "1.0.2",
+                "beta" => "1.1.0-beta",
+                _ => Regex.Match(tag, @"\d+(\.\d+)+").Value // fallback numeric detection
+            };
+        }
+
         private int CompareVersions(string v1, string v2)
         {
             try
             {
-                var version1 = new Version(v1);
-                var version2 = new Version(v2);
+                string cleanV1 = Regex.Match(v1, @"\d+(\.\d+){0,3}").Value;
+                string cleanV2 = Regex.Match(v2, @"\d+(\.\d+){0,3}").Value;
+
+                var version1 = new Version(string.IsNullOrEmpty(cleanV1) ? "0.0.0" : cleanV1);
+                var version2 = new Version(string.IsNullOrEmpty(cleanV2) ? "0.0.0" : cleanV2);
+
                 return version1.CompareTo(version2);
             }
             catch
