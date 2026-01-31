@@ -146,7 +146,7 @@ Example contents:
 4. Verify log file is being written
 
 ### App won't start
-- Install [.NET 6.0 Runtime](https://dotnet.microsoft.com/download/dotnet/6.0)
+- Install [.NET 8.0 Runtime](https://dotnet.microsoft.com/download/dotnet/8.0)
 - Run as Administrator
 - Check Windows Defender isn't blocking it
 
