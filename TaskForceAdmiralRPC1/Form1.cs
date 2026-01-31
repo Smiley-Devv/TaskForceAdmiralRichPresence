@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Drawing;
 using System.Windows.Forms;
 using System.IO;
@@ -99,7 +99,7 @@ namespace TaskForceAdmiralLiveRPC
         {
             try
             {
-                client = new DiscordRpcClient("1285061587509579826");
+                client = new DiscordRpcClient("1466871575247720583");
                 client.Logger = new ConsoleLogger() { Level = LogLevel.Warning };
 
                 client.OnReady += (sender, e) =>
@@ -430,7 +430,7 @@ namespace TaskForceAdmiralLiveRPC
 
         private void linkGitHub_LinkClicked(object sender, LinkLabelLinkClickedEventArgs e)
         {
-            string url = "https://github.com/Smiley-Devv/TaskForceAdmiralRPC"; // TODO: Update this
+            string url = "https://github.com/Smiley-Devv/TaskForceAdmiralRichPresence";
             try
             {
                 Process.Start(new ProcessStartInfo
